@@ -1,0 +1,19 @@
+# telegram info
+*.session
+*.env
+
+# runtime state
+state.json
+seen_incidents.json
+
+# raw pipeline data
+raw_messages.json
+messages_deduplicated.json
+messages_filtered.json
+
+# working directory
+data/
+
+# python cache
+__pycache__/
+*.pyc
