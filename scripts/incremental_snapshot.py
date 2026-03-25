@@ -3,16 +3,23 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient
+from dotenv import load_dotenv
+from pathlib import Path
 
+env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+
+STATE_FILE = DATA_DIR / "state.json"
+RAW_FILE = DATA_DIR / "raw_messages.json"
 # ───────── CONFIG ─────────
 
 api_id = os.getenv("TELEGRAM_API_ID")
 api_hash = os.getenv("TELEGRAM_API_HASH")
 
 CHANNEL = "https://t.me/breachdetect"
-
-STATE_FILE = "state.json"
-RAW_FILE = "raw_messages.json"
 
 BOOTSTRAP_DAYS = 15  # first run only
 

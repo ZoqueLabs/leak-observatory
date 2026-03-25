@@ -5,8 +5,45 @@ import os
 import re
 
 INPUT_FILE = "data/latest.json"
-SNAPSHOT_DIR = "snapshots"
-OUTPUT_DIR = "reports"
+SNAPSHOT_DIR = "../leaks-data/snapshots"
+OUTPUT_DIR = "../leaks-data/reports"
+
+# -----------------------------
+# Run state
+# -----------------------------
+
+RUN_STATE_FILE = "data/run_state.json"
+
+
+def load_last_run():
+
+    if not os.path.exists(RUN_STATE_FILE):
+        return None
+
+    try:
+        with open(RUN_STATE_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+            if not content:
+                return None
+
+            data = json.loads(content)
+            return data.get("last_run")
+
+    except Exception:
+        return None
+
+
+def save_current_run():
+
+    now = datetime.now(UTC).isoformat()
+
+    os.makedirs("data", exist_ok=True)
+
+    with open(RUN_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"last_run": now}, f, indent=2)
+
+    return now
 
 
 # -----------------------------
@@ -191,7 +228,15 @@ def main():
     with open(INPUT_FILE, "r", encoding="utf-8") as f:
         messages = json.load(f)
 
-    start_date, end_date = calculate_date_range(messages)
+    last_run = load_last_run()
+    current_run = save_current_run()
+
+    if last_run:
+        start_date = datetime.fromisoformat(last_run).strftime("%Y-%m-%d")
+    else:
+        start_date = "Primera ejecución"
+
+    end_date = datetime.fromisoformat(current_run).strftime("%Y-%m-%d")
 
     previous_messages = load_previous_snapshot()
     delta_section = build_delta_section(messages, previous_messages)
@@ -227,11 +272,11 @@ def main():
 
         f.write(f"""---
 layout: post
-title: "Filtraciones LATAM – {today}"
+title: "Filtraciones LATAM – {start_date} a {end_date}"
 datatable: true
 ---
 
-# Filtraciones LATAM – {today}
+# Filtraciones LATAM – {start_date} a {end_date}"
 
 **Cobertura de datos:** {start_date} → {end_date}
 

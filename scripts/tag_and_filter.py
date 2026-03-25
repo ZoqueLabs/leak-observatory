@@ -8,7 +8,7 @@ import hashlib
 # SNAPSHOT CONFIG
 # ----------------------------------
 
-SNAPSHOT_DIR = "snapshots"
+SNAPSHOT_DIR = "../leaks-data/snapshots"
 LATEST_FILE = "data/latest.json"
 
 # ----------------------------------
