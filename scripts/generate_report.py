@@ -1,102 +1,290 @@
-import json
-from collections import Counter, defaultdict
 from datetime import datetime, UTC
+import json
 import os
 import re
+import hashlib
+from pathlib import Path
+from collections import Counter, defaultdict
 
-INPUT_FILE = "data/latest.json"
-SNAPSHOT_DIR = "../leaks-data/snapshots"
-OUTPUT_DIR = "../leaks-data/reports"
+# ----------------------------------
+# PATH CONFIG
+# ----------------------------------
 
-# -----------------------------
-# Run state
-# -----------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+SNAPSHOT_DIR = BASE_DIR.parent / "leaks-data" / "snapshots"
+OUTPUT_DIR = BASE_DIR.parent / "leaks-data" / "reports"
 
+RAW_FILE = DATA_DIR / "raw_messages.json"
 RUN_STATE_FILE = "data/run_state.json"
 
+# ----------------------------------
+# COUNTRY DETECTION
+# ----------------------------------
 
-def load_last_run():
+COUNTRY_PATTERNS = {
+    "Argentina": [r"\bargentina\b"],
+    "Bolivia": [r"\bbolivia\b"],
+    "Brazil": [r"\bbrazil\b", r"\bbrasil\b"],
+    "Chile": [r"\bchile\b"],
+    "Colombia": [r"\bcolombia\b"],
+    "Ecuador": [r"\becuador\b"],
+    "Guyana": [r"\bguyana\b"],
+    "Paraguay": [r"\bparaguay\b"],
+    "Peru": [r"\bperu\b", r"\bperú\b"],
+    "Uruguay": [r"\buruguay\b"],
+    "Venezuela": [r"\bvenezuela\b"],
+    "Belize": [r"\bbelize\b"],
+    "Costa Rica": [r"\bcosta rica\b"],
+    "El Salvador": [r"\bel salvador\b"],
+    "Guatemala": [r"\bguatemala\b"],
+    "Honduras": [r"\bhonduras\b"],
+    "Nicaragua": [r"\bnicaragua\b"],
+    "Panama": [r"\bpanama\b", r"\bpanamá\b"],
+    "Mexico": [r"\bmexico\b", r"\bm[eé]xico\b"],
+}
 
-    if not os.path.exists(RUN_STATE_FILE):
+TARGET_COUNTRIES = set(COUNTRY_PATTERNS.keys())
+
+
+def detect_country(text):
+    if not text:
         return None
+
+    text = text.lower()
+
+    for country, patterns in COUNTRY_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return country
+    return None
+
+# ----------------------------------
+# JSON EXTRACTION
+# ----------------------------------
+
+def extract_embedded_json(text):
+
+    if not text:
+        return None
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1:
+        return None
+
+    json_str = text[start:end+1]
+
+    json_str = json_str.replace("“", '"')
+    json_str = json_str.replace("”", '"')
+    json_str = json_str.replace("’", "'")
 
     try:
-        with open(RUN_STATE_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-
-            if not content:
-                return None
-
-            data = json.loads(content)
-            return data.get("last_run")
-
-    except Exception:
+        return json.loads(json_str)
+    except:
         return None
 
+# ----------------------------------
+# SOURCE DETECTION + NORMALIZATION
+# ----------------------------------
+
+def normalize_source(source):
+
+    if not source:
+        return None
+
+    source = source.strip().lower()
+
+    source = re.sub(r"https?://", "", source)
+    source = source.replace("[.]", ".")
+
+    source = source.split("/")[0]
+    source = source.split(":")[0]
+
+    parts = source.split(".")
+
+    if len(parts) >= 2:
+        return parts[-2]
+
+    return source
+
+
+def detect_source(parsed_json):
+
+    if not parsed_json:
+        return None
+
+    raw_source = parsed_json.get("Source")
+
+    if not raw_source:
+        return None
+
+    return normalize_source(raw_source)
+
+# ----------------------------------
+# AUTHOR DETECTION
+# ----------------------------------
+
+def detect_author(parsed_json):
+
+    if not parsed_json:
+        return None
+
+    author = parsed_json.get("author")
+
+    if not author:
+        return None
+
+    author = author.strip()
+    author = author.strip("()")
+
+    return author.lower()
+
+# ----------------------------------
+# DEDUPLICATION
+# ----------------------------------
+
+def content_hash_from_field(content_value):
+    normalized = content_value.strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def fallback_hash(text):
+    normalized = text.strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+# ----------------------------------
+# SECTOR TAGGING
+# ----------------------------------
+
+def classify_sector(parsed_json, raw_text):
+
+    if parsed_json:
+        content = parsed_json.get("Content", "")
+        victim = parsed_json.get("Victim", "")
+        msg_type = parsed_json.get("Type", "")
+        text = (content + " " + victim + " " + msg_type).lower()
+    else:
+        text = raw_text.lower()
+
+    if any(word in text for word in [
+        "ramson", "ransomware", "ransom alert",
+        "published victim", "leak site"
+    ]):
+        return "Ransomware"
+
+    if any(word in text for word in [
+        "ministry", "ministerio", "suprema",
+        "judicial", "policia", "asamblea",
+        "electoral", ".gov", "state", ".gob",
+        "military", "army", "airforce", ".entidad",
+        "superintendencia", "nacional", "impuestos",
+        "tax", "impuesto", "unidad nacional"
+    ]):
+        return "Government"
+
+    if any(word in text for word in [
+        "hospital", "health", "clinic",
+        "unimed", "pacientes", "healthcare",
+        "salud", "eps", "ips", "hospitales",
+        "clinica"
+    ]):
+        return "Healthcare"
+
+    if any(word in text for word in [
+        "bank", "banco", "credit card", "cc ",
+        "cvv", "carding", "dump", "track 1",
+        "track 2", "cashout", "cash out",
+        "paypal", "apple pay", "chime", "ebt",
+        "usdt", "crypto", "btc", "eth", "bbva",
+        "wallet", "kyc",
+    ]):
+        return "Financial"
+
+    if any(word in text for word in [
+        "combo", "email:pass", "hotmail",
+        "mail access", "combolist", "access",
+        "combo list", "mailpass", "logs", "stealer",
+        "infostealer", "rdp", "browser data"
+    ]):
+        return "Credential Marketplace"
+
+    if any(word in text for word in [
+        "database", "db leak", "dumped database",
+        "leaked database", "data breach"
+    ]):
+        return "Database Leak"
+
+    return "Other"
+
+# ----------------------------------
+# RUN STATE
+# ----------------------------------
+
+def load_last_run():
+    if not os.path.exists(RUN_STATE_FILE):
+        return None
+    try:
+        with open(RUN_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("last_run")
+    except:
+        return None
 
 def save_current_run():
-
     now = datetime.now(UTC).isoformat()
-
     os.makedirs("data", exist_ok=True)
-
     with open(RUN_STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({"last_run": now}, f, indent=2)
-
     return now
 
-
-# -----------------------------
-# Snapshot helper
-# -----------------------------
+# ----------------------------------
+# SNAPSHOT
+# ----------------------------------
 
 def load_previous_snapshot():
-
     if not os.path.exists(SNAPSHOT_DIR):
         return None
-
     files = sorted(os.listdir(SNAPSHOT_DIR))
-
     if len(files) < 2:
         return None
-
-    previous_file = os.path.join(SNAPSHOT_DIR, files[-2])
-
-    with open(previous_file, "r", encoding="utf-8") as f:
+    with open(os.path.join(SNAPSHOT_DIR, files[-2]), "r", encoding="utf-8") as f:
         return json.load(f)
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
+def load_latest_snapshot():
+    if not os.path.exists(SNAPSHOT_DIR):
+        return []
+    files = sorted(os.listdir(SNAPSHOT_DIR))
+    if not files:
+        return []
+    with open(os.path.join(SNAPSHOT_DIR, files[-1]), "r", encoding="utf-8") as f:
+        return json.load(f)
+# ----------------------------------
+# MATRIX + SANKEY
+# ----------------------------------
 
 def build_matrix(messages, key_a, key_b):
-
     matrix = defaultdict(lambda: defaultdict(int))
-
     for msg in messages:
-
         a = msg.get(key_a)
         b = msg.get(key_b)
-
         if not a or not b:
             continue
-
         matrix[a][b] += 1
-
     return matrix
 
-
 def build_sankey(matrix):
-
     lines = []
-
     for left, rights in matrix.items():
         for right, count in rights.items():
             lines.append(f"  {left},{right},{count}")
-
     return "\n".join(lines)
 
+# ----------------------------------
+# OVERVIEW
+# ----------------------------------
 
 def build_weekly_overview(total, country_counts, sector_counts, source_counts):
 
@@ -218,15 +406,51 @@ def detect_country_increase(current_messages, previous_messages):
 
     return biggest_country, biggest_value
 
-
-# -----------------------------
-# Main
-# -----------------------------
+# ----------------------------------
+# MAIN PROCESSING
+# ----------------------------------
 
 def main():
 
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        messages = json.load(f)
+    with open(RAW_FILE, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    seen = set()
+    processed = []
+
+    for msg in raw:
+
+        text = msg.get("text", "")
+        parsed = extract_embedded_json(text)
+
+        if parsed and parsed.get("Content"):
+            h = content_hash_from_field(parsed["Content"])
+        else:
+            h = fallback_hash(text)
+
+        if h in seen:
+            continue
+
+        seen.add(h)
+
+        msg["content"] = parsed.get("Content") if parsed else text
+        msg["country"] = detect_country(text)
+        msg["sector"] = classify_sector(parsed, text)
+        msg["source"] = detect_source(parsed)
+        msg["author"] = detect_author(parsed)
+        msg["dedup_key"] = h
+
+        processed.append(msg)
+
+    filtered = [m for m in processed if m.get("country")]
+
+    previous_snapshot = load_latest_snapshot()
+
+    prev_keys = set(m.get("dedup_key") for m in previous_snapshot)
+    messages = [m for m in filtered if m["dedup_key"] not in prev_keys]
+
+    delta_section = build_delta_section(messages, previous_snapshot)
+    country_increase = detect_country_increase(messages, previous_snapshot)
 
     last_run = load_last_run()
     current_run = save_current_run()
@@ -237,10 +461,6 @@ def main():
         start_date = "Primera ejecución"
 
     end_date = datetime.fromisoformat(current_run).strftime("%Y-%m-%d")
-
-    previous_messages = load_previous_snapshot()
-    delta_section = build_delta_section(messages, previous_messages)
-    country_increase = detect_country_increase(messages, previous_messages)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -374,6 +594,22 @@ datatable: true
 
     print(f"Reporte generado: {filepath}")
 
+    now = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M")
+    snapshot_path = os.path.join(SNAPSHOT_DIR, f"{now}.json")
+
+    combined = previous_snapshot + messages
+
+    seen = set()
+    deduped = []
+
+    for m in combined:
+        if m["dedup_key"] in seen:
+            continue
+        seen.add(m["dedup_key"])
+        deduped.append(m)
+
+    with open(snapshot_path, "w", encoding="utf-8") as f:
+        json.dump(deduped, f, indent=2)
 
 if __name__ == "__main__":
     main()

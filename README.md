@@ -32,10 +32,14 @@ https://github.com/ZoqueLabs/leaks-data
 ```
 
 ## Scripts principales
-* `connect_telegram.py` Conecta con la API de Telegram y permite acceder a los canales configurados
-* `incremental_snapshot.py` Recolecta nuevos mensajes desde la última ejecución
-* `tag_and_filter.py` Extrae campos estructurados y filtra incidentes relacionados con LATAM
-* `generate_report.py` Genera reportes a partir de los snapshots
+* `connect_telegram.py`  
+   Conecta con la API de Telegram y permite acceder a los canales configurados.
+
+* `incremental_snapshot.py`  
+   Recolecta nuevos mensajes desde la última ejecución y los agrega al dataset crudo (`raw_messages.json`).
+
+* `generate_report.py`  
+  Procesa el dataset completo, aplica deduplicación y filtrado (LATAM), detecta nuevos incidentes respecto al snapshot anterior y genera el reporte junto con un nuevo snapshot acumulativo.
 
 ## Instalación
 Clonar el repositorio:
@@ -60,13 +64,9 @@ Puedes obtener estas credenciales en:
 https://my.telegram.org
 
 ## Ejecución del pipeline
-Recolectar mensajes:
+Recolectar mensajes (raw data):
 ```
 python scripts/incremental_snapshot.py
-```
-Procesar y filtrar:
-```
-python scripts/tag_and_filter.py
 ```
 Generar reporte:
 ```
